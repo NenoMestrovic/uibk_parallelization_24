@@ -1,4 +1,10 @@
 .cache
 .vscode
 build
+<<<<<<< HEAD
 
+=======
+build_release
+Analysis
+output.log
+>>>>>>> f0cf703 (27-07-20224)

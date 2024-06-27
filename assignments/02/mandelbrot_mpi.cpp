@@ -6,6 +6,7 @@
 #include <sys/time.h>
 #include <tuple>
 #include <vector>
+#include <mpi.h>
 
 // Include that allows to print result as an image
 // Also, ignore some warnings that pop up when compiling this as C++ mode
@@ -65,7 +66,7 @@ auto HSVToRGB(double H, const double S, double V) {
 	return std::make_tuple(R, G, B);
 }
 
-void calcMandelbrot(Image &image, int size_x, int size_y) {
+void calcMandelbrot(Image &image, int local_start_x, int local_end_x, int size_y) {
 
 	auto time_start = std::chrono::high_resolution_clock::now();
 	
@@ -109,7 +110,8 @@ void calcMandelbrot(Image &image, int size_x, int size_y) {
 			image[index(pixel_y, pixel_x, size_y, size_x, channel++)] = (uint8_t)(blue * UINT8_MAX);
 		}
 	}
-	
+
+	MPI_Finalize();
 	auto time_end = std::chrono::high_resolution_clock::now();
 	auto time_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(time_end - time_start).count();
 	
@@ -131,8 +133,25 @@ int main(int argc, char **argv) {
 
 	Image image(num_channels * size_x * size_y);
 
-	calcMandelbrot(image, size_x, size_y);
+	// MPI
+	MPI_Init(&argc, &argv);
 
+	// get myRank and total number of procs
+	int myRank, numProcs;
+	MPI_Comm_rank(MPI_COMM_WORLD, &myRank);
+	MPI_Comm_size(MPI_COMM_WORLD, &numProcs);
+
+	// Test if size_x divisible by numProcs
+	if(size_x % numProcs != 0) {
+		MPI_Finalize();
+		printf("Error: image.size() not divisible by numProcs\n");
+		return EXIT_FAILURE;
+	}
+
+	int local_start_x = myRank * size_x / numProcs;
+	int local_end_x = (myRank + 1) * size_x / numProcs;
+
+	calcMandelbrot(image, local_start_x, local_end_x, size_y);
 	constexpr int stride_bytes = 0;
 	stbi_write_png("mandelbrot_mpi.png", size_x, size_y, num_channels, image.data(), stride_bytes);
 

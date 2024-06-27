@@ -66,7 +66,7 @@ double grid_1D::get_inv_dx(int i_cell) const {
 }
 
 void grid_1D::build_lin_axis(double min, double max, size_t num_cells, int num_ghost_cells) {
-
+	// std::cout << "min " << min << " max " << max << std::endl;
 	assert(min < max);            // Min must be smaller than max
 	assert(num_cells > 1);        // size must be larger than a single cell
 	assert(num_ghost_cells >= 0); // number of ghoscells must not be smaller than zero
