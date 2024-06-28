@@ -1,4 +1,4 @@
-#include <bits/chrono.h>
+// #include <bits/chrono.h>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -66,7 +66,7 @@ auto HSVToRGB(double H, const double S, double V) {
 	return std::make_tuple(R, G, B);
 }
 
-void calcMandelbrot(Image &image, int local_start_x, int local_end_x, int size_y) {
+void calcMandelbrot(Image &image, int size_x, int size_y, int rank, int numProcs) {
 
 	auto time_start = std::chrono::high_resolution_clock::now();
 	
@@ -77,10 +77,13 @@ void calcMandelbrot(Image &image, int local_start_x, int local_end_x, int size_y
 	// 1) domain decomposition
 	//   - decide how to split the image into multiple parts
 	//   - ensure every rank is computing its own part only
+	int start_y = rank * size_y / numProcs;
+	int end_y = (rank + 1) * size_y / numProcs;
+	int local_y = end_y - start_y;
 	// 2) result aggregation
 	//   - aggregate the individual parts of the ranks into a single, complete image on the root rank (rank 0)
 
-	for (int pixel_y = 0; pixel_y < size_y; pixel_y++) {
+	for (int pixel_y = start_y; pixel_y < end_y; pixel_y++) {
 		// scale y pixel into mandelbrot coordinate system
 		const float cy = (pixel_y / (float)size_y) * (top - bottom) + bottom;
 		for (int pixel_x = 0; pixel_x < size_x; pixel_x++) {
@@ -110,50 +113,45 @@ void calcMandelbrot(Image &image, int local_start_x, int local_end_x, int size_y
 			image[index(pixel_y, pixel_x, size_y, size_x, channel++)] = (uint8_t)(blue * UINT8_MAX);
 		}
 	}
-
-	MPI_Finalize();
+	
 	auto time_end = std::chrono::high_resolution_clock::now();
 	auto time_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(time_end - time_start).count();
 	
-	std::cout << "Mandelbrot set calculation for " << size_x << "x" << size_y << " took: " << time_elapsed << " ms." << std::endl;
+	std::cout << "Mandelbrot set calculation for " << size_x << "x" << local_y << " took: " << time_elapsed << " ms." << std::endl;
 }
 
 int main(int argc, char **argv) {
-
-	int size_x = default_size_x;
-	int size_y = default_size_y;
-
-	if (argc == 3) {
-		size_x = atoi(argv[1]);
-		size_y = atoi(argv[2]);
-		std::cout << "Using size " << size_x << "x" << size_y << std::endl;
-	} else {
-		std::cout << "No arguments given, using default size " << size_x << "x" << size_y << std::endl;
-	}
-
-	Image image(num_channels * size_x * size_y);
-
-	// MPI
+	
 	MPI_Init(&argc, &argv);
 
-	// get myRank and total number of procs
-	int myRank, numProcs;
-	MPI_Comm_rank(MPI_COMM_WORLD, &myRank);
+	// Get rank, total number of processes
+	int rank, numProcs;
 	MPI_Comm_size(MPI_COMM_WORLD, &numProcs);
+	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-	// Test if size_x divisible by numProcs
-	if(size_x % numProcs != 0) {
-		MPI_Finalize();
-		printf("Error: image.size() not divisible by numProcs\n");
-		return EXIT_FAILURE;
+	int global_size_x = default_size_x;
+	int global_size_y = default_size_y;
+
+	if(argc == 3) {
+		global_size_x = atoi(argv[1]);
+		global_size_y = atoi(argv[2]);
+		std::cout << "Using size " << global_size_x << "x" << global_size_y << std::endl;
+	} else {
+		std::cout << "No arguments given, using default size " << global_size_x << "x" << global_size_y << std::endl;
 	}
 
-	int local_start_x = myRank * size_x / numProcs;
-	int local_end_x = (myRank + 1) * size_x / numProcs;
+	Image image(num_channels * global_size_x * global_size_y, 0);
+	
+	// Calculate the Mandelbrot image in a chunk specified by the rank
+	calcMandelbrot(image, global_size_x, global_size_y, rank, numProcs);
+	
+	// Reduce the individual images into a single image on the root rank
+	Image image_global(num_channels * global_size_x * global_size_y, 0);
+	MPI_Reduce(image.data(), image_global.data(), image.size(), MPI_UINT8_T, MPI_SUM, 0, MPI_COMM_WORLD);
 
-	calcMandelbrot(image, local_start_x, local_end_x, size_y);
 	constexpr int stride_bytes = 0;
-	stbi_write_png("mandelbrot_mpi.png", size_x, size_y, num_channels, image.data(), stride_bytes);
+	stbi_write_png("mandelbrot_mpi.png", global_size_x, global_size_y, num_channels, image_global.data(), stride_bytes);
 
+	MPI_Finalize();
 	return EXIT_SUCCESS;
 }
